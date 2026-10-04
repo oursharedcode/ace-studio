@@ -129,8 +129,8 @@ function BlockCard({ block, onDragStart }) {
       style={{
         display: "flex",
         alignItems: "center",
-        gap: 10,
-        padding: "10px 13px",
+        gap: 8,
+        padding: "10px 10px",
         marginBottom: 0,
         borderRadius: 10,
         border: `1.5px solid ${block.color}55`,
