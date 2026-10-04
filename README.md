@@ -58,8 +58,10 @@ Append an object to the layer's file:
 Three things to know:
 
 - `[UPPERCASE_TOKENS]` in `text` become chips. Filling a chip replaces the
-  first occurrence of that token only, so give each cell of a table its own
-  token (`[TASK_1]`, `[TASK_2]`).
+  copy that was clicked; Shift+Enter in the fill box replaces every copy of
+  that token in the block. Repeat a token where one value belongs in several
+  places (`[NODE_1]`), and give each cell of a table its own (`[TASK_1]`,
+  `[TASK_2]`).
 - Windows 10 draws emoji up to Emoji 12. A newer one shows as an empty box
   there, so pick from the older sets.
 - Outside the Prompt layer a template counts as "used" only by its `id`. The
@@ -75,12 +77,15 @@ can hold several groups, each with its own sub-heading; Context does.
 ## Features carried over
 
 - Block editor with drag-and-drop, inline editing, placeholder chips,
-  undo/redo, live word and character count.
+  undo/redo (typing included), live word and character count. Backspace at
+  the start of a block joins it to the one above. The document is kept in
+  the browser between visits.
 - Custom blocks: create, edit, delete, reorder, and save or load the library
   as `blocks.json`. A `blocks.json` from Prompt Engineering Studio loads here.
-- Export as `.prompt` JSON, Python string, OpenAI or Anthropic messages JSON,
-  Markdown, plain text, or an Agent Skill folder packed into a `.zip`.
-- In-browser library with colour-coded projects, and three themes.
+- Export as `.prompt` JSON, Python string, OpenAI messages JSON, an Anthropic
+  `system` + `messages` body, Markdown, plain text, or an Agent Skill folder
+  packed into a `.zip`.
+- Three themes.
 - Health score and hallucination badge. Both read the Prompt layer only.
 - Right rail: an AdSense slot (hidden until IDs are set) and the visitor map.
 

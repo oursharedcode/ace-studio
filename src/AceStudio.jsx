@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
 import pkg from "../package.json";
 // The palette's eight layers live in src/blocks/, one file per layer. BLOCKS is
 // the Prompt layer: the health score and the hallucination badge read only it.
@@ -225,6 +225,21 @@ const makeNamedBlock = (tpl) => ({
   color: tpl.color,
   text: tpl.text,
 });
+
+// The editor's blocks are kept in localStorage, so a reload or a closed tab
+// does not lose the document
+const EDITOR_KEY = "ace_studio_editor";
+
+const loadEditorBlocks = () => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(EDITOR_KEY) || "null");
+    if (Array.isArray(saved) && saved.length > 0 &&
+        saved.every((b) => b && typeof b.id === "string" && typeof b.text === "string")) {
+      return saved;
+    }
+  } catch { /* unreadable: start empty */ }
+  return [makeFreeBlock()];
+};
 
 // ─── Agent Skill folder export ───────────────────────────────────────────────
 // A skill is a folder (SKILL.md + references/ + scripts/ + assets/), not one
@@ -561,7 +576,9 @@ function buildBlockHtml(text) {
       (m) => `<span class="ph-chip" data-ph="${m}">${m}</span>`);
 }
 
-function extractBlockText(el) {
+// Text of a block div or fragment as the editor reads it: <br> and each new
+// <div> the browser inserts on Enter count as one newline
+function walkBlockText(root) {
   let t = "";
   const walk = (n) => {
     if (n.nodeType === Node.TEXT_NODE) { t += n.textContent; return; }
@@ -571,27 +588,64 @@ function extractBlockText(el) {
       n.childNodes.forEach(walk);
     }
   };
-  walk(el);
-  return t.replace(/\n$/, "");
+  root.childNodes.forEach(walk);
+  return t;
 }
 
+function extractBlockText(el) {
+  return walkBlockText(el).replace(/\n$/, "");
+}
+
+// Caret position in a block, in characters of its text
 function readCaretInDiv(el) {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0) return 0;
   const range = sel.getRangeAt(0);
-  if (!el.contains(range.startContainer)) return el.textContent.length;
-  let offset = 0;
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+  if (!el.contains(range.startContainer)) return extractBlockText(el).length;
+  const before = document.createRange();
+  before.selectNodeContents(el);
+  before.setEnd(range.startContainer, range.startOffset);
+  return walkBlockText(before.cloneContents()).length;
+}
+
+// Put the caret at a character offset in a block rendered by buildBlockHtml,
+// whose text nodes hold the whole text, newlines included
+function setCaretInDiv(el, offset) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const r = document.createRange();
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let left = offset;
   let node;
+  let placed = false;
   while ((node = walker.nextNode())) {
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      if ((node.tagName === "DIV" || node.tagName === "BR") && offset > 0) offset += 1;
-      continue;
-    }
-    if (node === range.startContainer) return offset + range.startOffset;
-    offset += node.textContent.length;
+    if (left <= node.textContent.length) { r.setStart(node, left); placed = true; break; }
+    left -= node.textContent.length;
   }
-  return el.textContent.length;
+  if (!placed) r.selectNodeContents(el);
+  r.collapse(placed);
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+// Fill copy n (from 0) of a [TOKEN] in a block's text, or every copy when n is
+// null. Returns the new text and the offset just after the last value written,
+// or a null caret when that copy is not there. Slicing, not String.replace,
+// so a "$" in the value stays literal.
+function fillPlaceholder(text, token, n, value) {
+  let out = "";
+  let last = 0;
+  let seen = -1;
+  let caret = null;
+  for (const m of text.matchAll(new RegExp(BLOCK_PH_RE.source, "g"))) {
+    if (m[0] !== token) continue;
+    seen += 1;
+    if (n !== null && seen !== n) continue;
+    out += text.slice(last, m.index) + value;
+    last = m.index + token.length;
+    caret = out.length;
+  }
+  return { text: out + text.slice(last), caret };
 }
 
 function BlockRow({
@@ -606,22 +660,19 @@ function BlockRow({
     if (externalDivRef) externalDivRef.current = el;
   };
 
-  // Keep DOM in sync when block.text changes externally (drop, undo, load…)
-  useEffect(() => {
+  // Keep DOM in sync when block.text changes externally (drop, undo, load…).
+  // A layout effect, so the DOM is current before AceStudio places the caret.
+  useLayoutEffect(() => {
     const el = divRef.current;
     if (!el) return;
     const html = buildBlockHtml(block.text);
     if (el.innerHTML !== html) {
-      const sel = window.getSelection();
+      // A rewrite while typing (a new line, a chip forming) keeps the caret
+      // where it was, counted in characters
+      const focused = document.activeElement === el;
+      const caret = focused ? readCaretInDiv(el) : 0;
       el.innerHTML = html;
-      // restore caret to end after rewrite
-      if (sel && document.activeElement === el) {
-        const r = document.createRange();
-        r.selectNodeContents(el);
-        r.collapse(false);
-        sel.removeAllRanges();
-        sel.addRange(r);
-      }
+      if (focused) setCaretInDiv(el, Math.min(caret, block.text.length));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.text]);
@@ -688,8 +739,9 @@ function BlockRow({
             // caret in middle: let browser add a line within this block
           }
           if (e.key === "Backspace") {
-            if (readCaretInDiv(divRef.current) === 0) {
-              // Backspace at first character: FORBIDDEN per spec
+            // Backspace before the first character joins this block onto the
+            // one above; with text selected, the browser deletes the selection
+            if (window.getSelection()?.isCollapsed && readCaretInDiv(divRef.current) === 0) {
               e.preventDefault();
               onBackspaceAtStart(block.id);
             }
@@ -704,12 +756,39 @@ function BlockRow({
 
 export default function AceStudio() {
   // ── Block model ───────────────────────────────────────────────────────────
-  const [blocks, setBlocks] = useState(() => [makeFreeBlock()]);
+  const [blocks, setBlocks] = useState(loadEditorBlocks);
   // promptText is derived from blocks — kept for export, copy, health-score, etc.
   const promptText = useMemo(() => blocks.map((b) => b.text).join("\n"), [blocks]);
   // Stable ref so async callbacks can read current blocks without stale closures
   const blocksRef = useRef(blocks);
   useEffect(() => { blocksRef.current = blocks; }, [blocks]);
+  // Set the blocks and the ref together, for handlers that build the next
+  // array from blocksRef and must not see a stale one on the next keystroke
+  const applyBlocks = useCallback((next) => {
+    blocksRef.current = next;
+    setBlocks(next);
+  }, []);
+
+  // Save the document a moment after each change, and at once when the tab is
+  // hidden or closed
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try { localStorage.setItem(EDITOR_KEY, JSON.stringify(blocks)); } catch { /* quota */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [blocks]);
+  useEffect(() => {
+    const flush = () => {
+      try { localStorage.setItem(EDITOR_KEY, JSON.stringify(blocksRef.current)); } catch { /* quota */ }
+    };
+    const onHidden = () => { if (document.visibilityState === "hidden") flush(); };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onHidden);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onHidden);
+    };
+  }, []);
   // blockDivRefs: block.id → the contenteditable DOM element
   const blockDivRefs = useRef({});
   // Which block currently has focus (used by drop handler)
@@ -725,8 +804,6 @@ export default function AceStudio() {
   const [redoStack, setRedoStack] = useState([]);
   const [undoBounce, setUndoBounce] = useState(false);
   const [redoBounce, setRedoBounce] = useState(false);
-  const [savedPrompts, setSavedPrompts] = useState([]); // [{id, name, text, savedAt, projectId}]
-  const [projects, setProjects] = useState([]);          // [{id, name, color}]
   const [exportFlash, setExportFlash] = useState(false); // brief green flash on export
   const [skin, setSkin] = useState("black"); // "black" | "white" | "grey"
   const [showGallery, setShowGallery] = useState(false);  // Template Gallery modal
@@ -766,7 +843,7 @@ export default function AceStudio() {
   const [reorderDragId, setReorderDragId] = useState(null);  // block id being reordered
   const [reorderOverId, setReorderOverId] = useState(null);  // block id currently hovered
   // Inline placeholder substitution
-  const [activePlaceholder, setActivePlaceholder] = useState(null); // {index, placeholder, rect}
+  const [activePlaceholder, setActivePlaceholder] = useState(null); // {blockId, placeholder, occurrence, copies, x, y}
   const [placeholderInput, setPlaceholderInput] = useState("");
   const placeholderInputRef = useRef(null);
   const [placeholderNavIdx, setPlaceholderNavIdx] = useState(0); // cycling index for the progress bar counter click
@@ -790,142 +867,193 @@ export default function AceStudio() {
     if (bs.length > 0) blockDivRefs.current[bs[bs.length - 1].id]?.focus();
   }, []);
 
-  // ── Undo / Redo — snapshots are Block[] arrays ────────────────────────────
-  const pushUndo = useCallback((blocksSnapshot) => {
-    setUndoStack((prev) => [...prev.slice(-49), blocksSnapshot]);
-    setRedoStack([]);
+  // Focus a block and put the caret at a character offset (the end when
+  // omitted). Called with a change to the blocks; applied in the same commit,
+  // so a key pressed straight after a join or a split is not lost.
+  const pendingFocusRef = useRef(null);
+  const focusBlockAt = useCallback((id, offset) => {
+    pendingFocusRef.current = { id, offset };
   }, []);
+  useLayoutEffect(() => {
+    const p = pendingFocusRef.current;
+    if (!p) return;
+    pendingFocusRef.current = null;
+    const el = blockDivRefs.current[p.id];
+    if (!el) return;
+    el.focus();
+    setCaretInDiv(el, p.offset ?? extractBlockText(el).length);
+  }, [blocks]);
+
+  // ── Undo / Redo — snapshots are Block[] arrays ────────────────────────────
+  // The stacks live in refs and are changed outside state updaters, so a step
+  // is recorded once; the state copies drive the buttons.
+  const undoRef = useRef([]);
+  const redoRef = useRef([]);
+  // The typing run the newest snapshot covers: { id, at }. Typing in the same
+  // block with no pause over a second adds to that step instead of a new one.
+  const typingRef = useRef(null);
+
+  const syncHistory = useCallback(() => {
+    setUndoStack(undoRef.current);
+    setRedoStack(redoRef.current);
+  }, []);
+
+  const pushUndo = useCallback((blocksSnapshot) => {
+    undoRef.current = [...undoRef.current.slice(-49), blocksSnapshot];
+    redoRef.current = [];
+    typingRef.current = null;
+    syncHistory();
+  }, [syncHistory]);
+
+  // Show a snapshot and focus the first block it changes, caret at the end
+  const restoreSnapshot = useCallback((restored) => {
+    const current = blocksRef.current;
+    const changed = restored.find((b, i) => current[i]?.id !== b.id || current[i]?.text !== b.text)
+      || restored[restored.length - 1];
+    applyBlocks(restored);
+    setActivePlaceholder(null);
+    if (changed) focusBlockAt(changed.id);
+  }, [applyBlocks, focusBlockAt]);
 
   const handleUndo = useCallback(() => {
-    setUndoStack((prev) => {
-      if (prev.length === 0) return prev;
-      const next = [...prev];
-      const restored = next.pop();
-      setBlocks((current) => {
-        setRedoStack((r) => [...r.slice(-49), current]);
-        return restored;
-      });
-      setUndoBounce(true);
-      setTimeout(() => setUndoBounce(false), 350);
-      setTimeout(() => {
-        const id = restored[0]?.id;
-        if (id) blockDivRefs.current[id]?.focus();
-      }, 20);
-      return next;
-    });
-  }, []);
+    if (undoRef.current.length === 0) return;
+    const restored = undoRef.current[undoRef.current.length - 1];
+    undoRef.current = undoRef.current.slice(0, -1);
+    redoRef.current = [...redoRef.current.slice(-49), blocksRef.current];
+    typingRef.current = null;
+    syncHistory();
+    restoreSnapshot(restored);
+    setUndoBounce(true);
+    setTimeout(() => setUndoBounce(false), 350);
+  }, [syncHistory, restoreSnapshot]);
 
   const handleRedo = useCallback(() => {
-    setRedoStack((prev) => {
-      if (prev.length === 0) return prev;
-      const next = [...prev];
-      const restored = next.pop();
-      setBlocks((current) => {
-        setUndoStack((u) => [...u.slice(-49), current]);
-        return restored;
-      });
-      setRedoBounce(true);
-      setTimeout(() => setRedoBounce(false), 350);
-      setTimeout(() => {
-        const id = restored[0]?.id;
-        if (id) blockDivRefs.current[id]?.focus();
-      }, 20);
-      return next;
-    });
-  }, []);
+    if (redoRef.current.length === 0) return;
+    const restored = redoRef.current[redoRef.current.length - 1];
+    redoRef.current = redoRef.current.slice(0, -1);
+    undoRef.current = [...undoRef.current.slice(-49), blocksRef.current];
+    typingRef.current = null;
+    syncHistory();
+    restoreSnapshot(restored);
+    setRedoBounce(true);
+    setTimeout(() => setRedoBounce(false), 350);
+  }, [syncHistory, restoreSnapshot]);
 
   // ── Block operations ──────────────────────────────────────────────────────
 
   // Update text of one block; delete it if emptied (keep minimum 1 block)
   const updateBlockText = useCallback((id, text) => {
-    setBlocks((prev) => {
-      const idx = prev.findIndex((b) => b.id === id);
-      if (idx === -1) return prev;
-      if (!text) {
-        if (prev.length > 1) {
-          // Block emptied and not the only block → delete it, focus neighbour
-          const neighbour = prev[idx - 1] || prev[idx + 1];
-          setTimeout(() => {
-            if (neighbour) blockDivRefs.current[neighbour.id]?.focus();
-          }, 10);
-          return prev.filter((b) => b.id !== id);
-        }
-        // Only block: strip colour/label so the colour strip disappears
-        const next = [...prev];
-        next[idx] = { ...next[idx], blockId: null, label: null, color: null, text: "" };
-        return next;
+    const prev = blocksRef.current;
+    const idx = prev.findIndex((b) => b.id === id);
+    if (idx === -1) return;
+    const now = Date.now();
+    const run = typingRef.current;
+    if (!run || run.id !== id || now - run.at > 1000) pushUndo(prev);
+    typingRef.current = { id, at: now };
+    if (!text) {
+      if (prev.length > 1) {
+        // Block emptied and not the only block → delete it, focus neighbour
+        const above = prev[idx - 1];
+        applyBlocks(prev.filter((b) => b.id !== id));
+        typingRef.current = null;
+        if (above) focusBlockAt(above.id);
+        else focusBlockAt(prev[idx + 1].id, 0);
+        return;
       }
-      const next = [...prev];
-      next[idx] = { ...next[idx], text };
-      return next;
-    });
-  }, []);
+      // Only block: strip colour/label so the colour strip disappears
+      applyBlocks([{ ...prev[idx], blockId: null, label: null, color: null, text: "" }]);
+      return;
+    }
+    const next = [...prev];
+    next[idx] = { ...next[idx], text };
+    applyBlocks(next);
+  }, [pushUndo, applyBlocks, focusBlockAt]);
 
   // Enter at end of block → new free block inserted after
   const handleEnterAtEnd = useCallback((blockId) => {
     const nb = makeFreeBlock();
-    setBlocks((prev) => {
-      pushUndo(prev);
-      setRedoStack([]);
-      const idx = prev.findIndex((b) => b.id === blockId);
-      const next = [...prev];
-      next.splice(idx + 1, 0, nb);
-      return next;
-    });
-    setTimeout(() => blockDivRefs.current[nb.id]?.focus(), 20);
-  }, [pushUndo]);
+    const prev = blocksRef.current;
+    pushUndo(prev);
+    const idx = prev.findIndex((b) => b.id === blockId);
+    const next = [...prev];
+    next.splice(idx + 1, 0, nb);
+    applyBlocks(next);
+    focusBlockAt(nb.id, 0);
+  }, [pushUndo, applyBlocks, focusBlockAt]);
 
   // Enter before first char of block → new free block inserted before
   const handleEnterAtStart = useCallback((blockId) => {
     const nb = makeFreeBlock();
-    setBlocks((prev) => {
-      pushUndo(prev);
-      setRedoStack([]);
-      const idx = prev.findIndex((b) => b.id === blockId);
-      const next = [...prev];
-      next.splice(idx, 0, nb);
-      return next;
-    });
-    setTimeout(() => blockDivRefs.current[nb.id]?.focus(), 20);
-  }, [pushUndo]);
+    const prev = blocksRef.current;
+    pushUndo(prev);
+    const idx = prev.findIndex((b) => b.id === blockId);
+    const next = [...prev];
+    next.splice(idx, 0, nb);
+    applyBlocks(next);
+    focusBlockAt(nb.id, 0);
+  }, [pushUndo, applyBlocks, focusBlockAt]);
 
-  // Backspace at first char → forbidden per spec; do nothing
-  const handleBackspaceAtStart = useCallback(() => {}, []);
+  // Backspace before the first character joins the block onto the end of the
+  // one above, as deleting the line break between them would. The joined block
+  // keeps the upper block's template, or this one's when the upper is free
+  // text. An empty first block is removed instead, when others follow it.
+  const handleBackspaceAtStart = useCallback((blockId) => {
+    const prev = blocksRef.current;
+    const idx = prev.findIndex((b) => b.id === blockId);
+    if (idx === -1) return;
+    const cur = prev[idx];
+    if (idx === 0) {
+      if (cur.text || prev.length === 1) return;
+      pushUndo(prev);
+      applyBlocks(prev.slice(1));
+      focusBlockAt(prev[1].id, 0);
+      return;
+    }
+    const above = prev[idx - 1];
+    const keep = above.blockId || !cur.blockId ? above : cur;
+    const joined = { ...keep, id: above.id, text: above.text + cur.text };
+    pushUndo(prev);
+    applyBlocks([...prev.slice(0, idx - 1), joined, ...prev.slice(idx + 1)]);
+    focusBlockAt(above.id, above.text.length);
+  }, [pushUndo, applyBlocks, focusBlockAt]);
 
   // Drop a template block: insert named block after the currently focused block
   const handleBlockDrop = useCallback((templateBlockId) => {
     const tpl = [...customBlocks, ...ALL_BLOCKS].find((b) => b.id === templateBlockId);
     if (!tpl) return;
     const nb = makeNamedBlock(tpl);
-    setBlocks((prev) => {
-      pushUndo(prev);
-      setRedoStack([]);
-      const focId = focusedBlockId.current;
-      const idx = focId ? prev.findIndex((b) => b.id === focId) : prev.length - 1;
-      const insertAfter = idx === -1 ? prev.length - 1 : idx;
-      const next = [...prev];
-      // If the currently focused block is an empty free block, replace it
-      if (focId && prev[insertAfter]?.blockId === null && prev[insertAfter]?.text === "") {
-        next[insertAfter] = nb;
-        return next;
-      }
+    const prev = blocksRef.current;
+    pushUndo(prev);
+    const focId = focusedBlockId.current;
+    const idx = focId ? prev.findIndex((b) => b.id === focId) : prev.length - 1;
+    const insertAfter = idx === -1 ? prev.length - 1 : idx;
+    const next = [...prev];
+    // If the currently focused block is an empty free block, replace it
+    if (focId && prev[insertAfter]?.blockId === null && prev[insertAfter]?.text === "") {
+      next[insertAfter] = nb;
+    } else {
       next.splice(insertAfter + 1, 0, nb);
-      return next;
-    });
+    }
+    applyBlocks(next);
     setActivePlaceholder(null);
     setInsertedFlash({ blockId: templateBlockId, ts: Date.now() });
     setTimeout(() => setInsertedFlash(null), 800);
     setTimeout(() => blockDivRefs.current[nb.id]?.focus(), 20);
-  }, [customBlocks, pushUndo]);
+  }, [customBlocks, pushUndo, applyBlocks]);
 
   // Placeholder clicked inside a BlockRow
   const handlePlaceholderClick = useCallback((e, span, blockId) => {
     e.preventDefault();
     const rect = span.getBoundingClientRect();
     const containerRect = dropZoneRef.current?.getBoundingClientRect() || { left: 0, top: 0 };
+    // Which copy of the token was clicked, when the block repeats it
+    const copies = [...(blockDivRefs.current[blockId]?.querySelectorAll(".ph-chip") || [])]
+      .filter((c) => c.dataset.ph === span.dataset.ph);
     setActivePlaceholder({
       blockId,
       placeholder: span.dataset.ph,
+      occurrence: Math.max(0, copies.indexOf(span)),
+      copies: copies.length,
       x: rect.left - containerRect.left,
       y: rect.bottom - containerRect.top + 6,
       spanRect: rect,
@@ -960,7 +1088,7 @@ export default function AceStudio() {
   const clearAll = () => {
     if (blocks.length > 0 && blocks.some((b) => b.text)) pushUndo(blocks);
     const empty = makeFreeBlock();
-    setBlocks([empty]);
+    applyBlocks([empty]);
     setActivePlaceholder(null);
     setTimeout(() => blockDivRefs.current[empty.id]?.focus(), 10);
   };
@@ -1006,17 +1134,11 @@ export default function AceStudio() {
 
   const activeBlock = [...customBlocks, ...ALL_BLOCKS].find((b) => b.id === activeBlockId);
 
-  // ── Persist library + projects to localStorage ───────────────────────────
-  const STORAGE_KEY = "ace_studio_library";
-  const PROJECTS_KEY = "ace_studio_projects";
+  // ── Load custom blocks from localStorage ──────────────────────────────────
   const BLOCKS_KEY = "ace_studio_blocks";
 
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) setSavedPrompts(JSON.parse(stored));
-      const storedProjects = localStorage.getItem(PROJECTS_KEY);
-      if (storedProjects) setProjects(JSON.parse(storedProjects));
       const storedBlocks = localStorage.getItem(BLOCKS_KEY);
       if (storedBlocks) setCustomBlocks(JSON.parse(storedBlocks));
     } catch { /* ignore corrupt data */ }
@@ -1033,16 +1155,6 @@ export default function AceStudio() {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [unsavedBlocks]);
-
-  const persistLibrary = (list) => {
-    setSavedPrompts(list);
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(list)); } catch { /* quota */ }
-  };
-
-  const persistProjects = (list) => {
-    setProjects(list);
-    try { localStorage.setItem(PROJECTS_KEY, JSON.stringify(list)); } catch { /* quota */ }
-  };
 
   // ── Custom block helpers ──────────────────────────────────────────────────
 
@@ -1215,18 +1327,19 @@ export default function AceStudio() {
   };
 
   // Commit placeholder substitution — updates the specific block that contains it
-  const commitPlaceholder = () => {
+  // Fills the copy that was clicked, or with `all` every copy in the block
+  const commitPlaceholder = (all = false) => {
     if (!activePlaceholder) return;
-    const { blockId, placeholder } = activePlaceholder;
+    const { blockId, placeholder, occurrence } = activePlaceholder;
     const val = placeholderInput;
-    if (!val) { setActivePlaceholder(null); return; }
-    pushUndo(blocksRef.current);
-    setBlocks((prev) => prev.map((b) =>
-      b.id === blockId ? { ...b, text: b.text.replace(placeholder, val) } : b
-    ));
+    const block = blocksRef.current.find((b) => b.id === blockId);
+    const filled = val && block ? fillPlaceholder(block.text, placeholder, all ? null : occurrence, val) : null;
     setActivePlaceholder(null);
+    if (!filled || filled.caret === null) return;
+    pushUndo(blocksRef.current);
+    applyBlocks(blocksRef.current.map((b) => (b.id === blockId ? { ...b, text: filled.text } : b)));
     setPlaceholderInput("");
-    setTimeout(() => blockDivRefs.current[blockId]?.focus(), 10);
+    focusBlockAt(blockId, filled.caret);
   };
 
   // ── Export prompt as .prompt file ─────────────────────────────────────────
@@ -1315,14 +1428,28 @@ export default function AceStudio() {
     },
     {
       id: "openai",
-      label: "OpenAI / Anthropic messages",
+      label: "OpenAI messages",
       icon: "🤖",
-      desc: "JSON messages array for API calls",
+      desc: "JSON messages array with a system message",
       ext: ".json",
       mime: "application/json",
       build: (text) => JSON.stringify([
         { role: "system", content: text }
       ], null, 2),
+    },
+    {
+      // The Messages API takes the system prompt as a top-level field and
+      // rejects a "system" role; it needs at least one user turn
+      id: "anthropic",
+      label: "Anthropic messages",
+      icon: "🧠",
+      desc: "JSON system field plus a user turn to fill",
+      ext: ".json",
+      mime: "application/json",
+      build: (text) => JSON.stringify({
+        system: text,
+        messages: [{ role: "user", content: "[USER_MESSAGE]" }],
+      }, null, 2),
     },
     {
       id: "markdown",
@@ -1422,11 +1549,6 @@ export default function AceStudio() {
   };
 
 
-  const handleDeleteSaved = (id, e) => {
-    e.stopPropagation();
-    persistLibrary(savedPrompts.filter((p) => p.id !== id));
-  };
-
   // ── Load a .prompt file from the user's machine via <input type="file"> ──
   const fileInputRef = useRef(null);
 
@@ -1444,7 +1566,7 @@ export default function AceStudio() {
       }
       pushUndo(blocksRef.current);
       const loaded = makeFreeBlock(text);
-      setBlocks([loaded]);
+      applyBlocks([loaded]);
       setTimeout(() => blockDivRefs.current[loaded.id]?.focus(), 20);
     } catch (err) {
       console.error("Failed to load .prompt file:", err);
@@ -1590,7 +1712,7 @@ export default function AceStudio() {
 
       pushUndo(blocksRef.current);
       const loaded = makeFreeBlock(buildBufferFromSkillFiles(fetched));
-      setBlocks([loaded]);
+      applyBlocks([loaded]);
       setBbStatus("ready"); setBbOpeningId(null); setShowBitbucket(false);
       setTimeout(() => blockDivRefs.current[loaded.id]?.focus(), 20);
     } catch (err) {
@@ -1623,17 +1745,21 @@ export default function AceStudio() {
     });
   }, [bbIndex, bbQuery, bbActiveTags]);
 
-  // Keyboard shortcuts: Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo
+  // Keyboard shortcuts: Ctrl+Z undo, Ctrl+Y / Ctrl+Shift+Z redo. Text boxes
+  // outside the editor (placeholder fill, block form, Bitbucket search) keep
+  // the browser's own undo. With Shift held the key arrives as "Z".
   useEffect(() => {
     const handler = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const t = e.target;
+      if (t instanceof HTMLElement &&
+          (t.matches("input, textarea, select") || (t.isContentEditable && !t.closest("[data-block-id]")))) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) {
         e.preventDefault();
         handleUndo();
       }
-      if (
-        (e.ctrlKey || e.metaKey) &&
-        (e.key === "y" || (e.key === "z" && e.shiftKey))
-      ) {
+      if (key === "y" || (key === "z" && e.shiftKey)) {
         e.preventDefault();
         handleRedo();
       }
@@ -2128,17 +2254,6 @@ export default function AceStudio() {
             }}
           >
             📂 LOAD
-            {savedPrompts.length > 0 && (
-              <span style={{
-                position: "absolute", top: -6, right: -6,
-                background: "#60A5FA", color: "#080B14",
-                borderRadius: "50%", width: 16, height: 16,
-                fontSize: 9, fontWeight: 800,
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                {savedPrompts.length > 99 ? "99+" : savedPrompts.length}
-              </span>
-            )}
           </button>
 
           {/* ── Open from Bitbucket button ── */}
@@ -2168,7 +2283,7 @@ export default function AceStudio() {
               e.currentTarget.style.borderColor = "#2684FF55";
             }}
           >
-            🪣 BITBUCKET
+            🧺 BITBUCKET
           </button>
 
           {/* Template Gallery button */}
@@ -2248,7 +2363,7 @@ export default function AceStudio() {
                 }}>
                   {[
                     "✨","🔥","⚡","🌟","💎","🚀","🎪","🔮","🗝️","🧩",
-                    "🪄","🎲","🔭","🧬","🧲","💠","🔑","🧿","🎴","🃏",
+                    "🎩","🎲","🔭","🧬","🧲","💠","🔑","🧿","🎴","🃏",
                     "🏗️","🔧","🔩","⚗️","🧪","📡","🛰️","🧭","🗃️","📎",
                   ].map((em) => (
                     <button
@@ -2775,7 +2890,7 @@ Before responding:
           pushUndo(blocksRef.current);
           const text = tab === "example" ? selected.example : selected.template;
           const loaded = makeFreeBlock(text);
-          setBlocks([loaded]);
+          applyBlocks([loaded]);
           setShowGallery(false);
           setTimeout(() => blockDivRefs.current[loaded.id]?.focus(), 20);
         };
@@ -3009,7 +3124,7 @@ Before responding:
           >
             {/* Header */}
             <div style={{ padding: "12px 16px", borderBottom: `1px solid ${sk.border}`, display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 20 }}>🪣</span>
+              <span style={{ fontSize: 20 }}>🧺</span>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 800, color: sk.text, letterSpacing: 0.3 }}>Open skill from Bitbucket</div>
                 <div style={{ fontSize: 10.5, color: sk.textDim, marginTop: 2 }}>Browse a Bitbucket Cloud repo, search by name / description / tags, and load a skill into the editor</div>
@@ -3063,7 +3178,7 @@ Before responding:
                         onMouseEnter={(e) => { e.currentTarget.style.background = sk.card3Bg || "#ffffff12"; }}
                         onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
                       >
-                        <span style={{ fontSize: 14 }}>🪣</span>
+                        <span style={{ fontSize: 14 }}>🧺</span>
                         <span style={{ flex: 1, minWidth: 0 }}>
                           <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: sk.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{entry.workspace}/{entry.repo}</span>
                           {(entry.ref || entry.path) && (
@@ -4049,7 +4164,7 @@ Before responding:
                     onChange={(e) => setPlaceholderInput(e.target.value)}
                     placeholder="Type replacement…"
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") { e.preventDefault(); commitPlaceholder(); }
+                      if (e.key === "Enter") { e.preventDefault(); commitPlaceholder(e.shiftKey); }
                       if (e.key === "Escape") { setActivePlaceholder(null); editorRef.current?.focus(); }
                     }}
                     style={{
@@ -4068,7 +4183,7 @@ Before responding:
                     onBlur={(e) => { e.target.style.borderColor = "#F59E0B66"; }}
                   />
                   <button
-                    onClick={commitPlaceholder}
+                    onClick={() => commitPlaceholder(false)}
                     disabled={!placeholderInput.trim()}
                     style={{
                       background: placeholderInput.trim() ? "#F59E0B" : sk.border,
@@ -4082,8 +4197,10 @@ Before responding:
                     ↵ Replace
                   </button>
                 </div>
-                <div style={{ fontSize: 10, color: sk.textFaint }}>
-                  Enter to replace · Esc to cancel
+                <div style={{ fontSize: 10, color: sk.textFaint, maxWidth: 240, lineHeight: 1.5 }}>
+                  {activePlaceholder.copies > 1
+                    ? `Enter replaces this one · Shift+Enter all ${activePlaceholder.copies} in the block · Esc to cancel`
+                    : "Enter to replace · Esc to cancel"}
                 </div>
               </div>
             )}
@@ -4103,8 +4220,8 @@ Before responding:
 
             // A template counts as used when a block dropped from it is in the
             // editor. Prompt-layer and custom blocks also match on their opening
-            // text, as hasBlock does, so a prompt loaded from a file or the
-            // library is still recognised. That match looks only at text with
+            // text, as hasBlock does, so a prompt loaded from a file is still
+            // recognised. That match looks only at text with
             // no template behind it: the front matter of a skill would
             // otherwise count as a Separator. The other layers match by id
             // only, because several of their templates open with the same line.
