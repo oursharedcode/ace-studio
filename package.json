@@ -1,0 +1,25 @@
+{
+  "name": "ace-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ACE Studio — a drag-and-drop editor for the documents agentic AI work is written in, with templates for eight layers: Prompt, Context, Harness, Loop, Graph, Fleet, Organisation and Holding.",
+  "homepage": "https://www.oursharedcode.com/ace-studio",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/oursharedcode/ace-studio.git"
+  },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "vite": "^5.4.11"
+  }
+}

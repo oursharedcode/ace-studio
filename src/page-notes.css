@@ -1,0 +1,47 @@
+/* Styling for the static prose under #root in index.html.
+   It lives in a file rather than an inline <style> on purpose: with several
+   HTML entries in the build, Vite 5's html-inline-proxy intermittently fails
+   to resolve an inline block ("No matching HTML proxy module found"), and the
+   error names index.html without hinting that the guides caused it. A linked
+   stylesheet takes that whole code path out of the build. */
+
+.page-notes {
+  background: #0a0e1a;
+  color: #c3cbdc;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 1rem;
+  line-height: 1.7;
+  border-top: 1px solid #252d42;
+  padding: 4rem 1.5rem 5rem;
+}
+.page-notes > * { max-width: 44rem; margin-left: auto; margin-right: auto; }
+.page-notes h1 {
+  font-size: clamp(1.7rem, 5vw, 2.1rem);
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: #f2f4f8;
+  margin: 0 0 1.25rem;
+}
+.page-notes h2 {
+  font-size: 1.15rem;
+  letter-spacing: -0.005em;
+  color: #f2f4f8;
+  margin: 2.75rem 0 0.75rem;
+}
+.page-notes p { margin: 0 0 1.15rem; }
+.page-notes ul { margin: 0 0 1.15rem; padding-left: 1.15rem; }
+.page-notes li { margin: 0 0 0.85rem; }
+.page-notes strong { color: #eef1f6; }
+.page-notes code {
+  font-family: ui-monospace, "IBM Plex Mono", Menlo, monospace;
+  font-size: 0.9em;
+  color: #d7c9ff;
+}
+.page-notes a { color: #b39dff; }
+.page-notes footer {
+  margin-top: 3rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid #252d42;
+  font-size: 0.92rem;
+  color: #8c96ab;
+}

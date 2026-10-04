@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ACE Studio</title>
+    <meta
+      name="description"
+      content="A free drag-and-drop studio for the documents agentic AI work is written in. Templates for eight layers: Prompt, Context, Harness, Loop, Graph, Fleet, Organisation and Holding. Everything you write stays in your browser or on your own disk."
+    />
+    <link rel="canonical" href="https://www.oursharedcode.com/ace-studio/" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎛️</text></svg>"
+    />
+    <!--
+      The prose under #root is static on purpose. React owns #root and nothing
+      else, so this survives every render, and a reader with JavaScript off, or
+      a crawler that does not execute it, still gets the whole page. The
+      stylesheet is a linked file because an inline <style> block in an HTML
+      entry is a known way to break a Vite 5 build.
+    -->
+    <link rel="stylesheet" href="./src/page-notes.css" />
+  </head>
+  <body style="margin: 0">
+    <noscript>
+      The studio itself needs JavaScript to run. The description of it, below,
+      does not.
+    </noscript>
+    <div id="root"></div>
+
+    <section class="page-notes">
+      <h1>ACE Studio</h1>
+
+      <p>
+        ACE stands for Automated Computer Engineering. The studio above is a
+        drag-and-drop editor for the documents that work with AI agents is
+        written in: system prompts, specs, tool definitions, permission rules,
+        loop prompts, workflow specs, task briefs, role cards, mandate letters.
+        It grew out of
+        <a href="https://www.oursharedcode.com/prompt-engineering-studio/"
+          >Prompt Engineering Studio</a
+        >, which covers the first of those, and it adds seven more layers of
+        templates down the left side.
+      </p>
+
+      <h2>The eight layers</h2>
+
+      <p>
+        The layers are ordered by how much each one contains. A prompt sits
+        inside a context, a context inside a harness, and so on up to a holding
+        of several organisations. The list reflects the field as it stood in
+        October 2026.
+      </p>
+
+      <ol>
+        <li>
+          <strong>Prompt: one model call.</strong> Twelve blocks: Role,
+          Context, Task, Constraints, Think Step-by-Step, Output Format,
+          Few-Shot Examples, Self-Verify, Tone &amp; Style, Grounding,
+          Uncertainty and a plain Separator.
+        </li>
+        <li>
+          <strong>Context: what the model is given.</strong> Three spec
+          documents (requirements, design, tasks), three steering files
+          (product, tech, structure), and seven blocks for agent skills, from
+          the folder layout of a skill to a checklist for shipping one.
+        </li>
+        <li>
+          <strong>Harness: one agent and its tools.</strong> Agent
+          instructions, a tool definition, permissions, hooks, a subagent, MCP
+          servers, a sandbox, a memory policy and a definition of done.
+        </li>
+        <li>
+          <strong>Loop: one agent, many turns.</strong> The iteration prompt, a
+          plan file, a progress file, a verification gate, stop conditions,
+          pacing, a protocol for an agent that is stuck, and a handoff note.
+        </li>
+        <li>
+          <strong>Graph: agents wired in fixed steps.</strong> A workflow spec,
+          a node contract, shared state, a router, fan-out and fan-in, a
+          verifier node, a human gate, and rules for retry and fallback.
+        </li>
+        <li>
+          <strong>Fleet: many agents in parallel.</strong> A manifest, a task
+          brief, a work queue, isolation and merge rules, budgets and limits, a
+          status report, monitoring, and a kill switch.
+        </li>
+        <li>
+          <strong>Organisation: agents arranged as a company.</strong> A
+          charter, a role card, an org chart, decision rights, an escalation
+          path, an operating cadence, a policy, a performance review and an
+          onboarding pack.
+        </li>
+        <li>
+          <strong>Holding: several organisations under one owner.</strong> A
+          portfolio map, a mandate letter, budget and compute allocation, shared
+          services, a contract between two organisations, governance and audit,
+          a risk register with circuit breakers, and checklists for starting an
+          organisation and closing it.
+        </li>
+      </ol>
+
+      <h2>How to use it</h2>
+
+      <p>
+        Click a layer's name on the left to open it. Drag a template into the
+        editor and it lands as an editable block with starter text already in
+        it. Anything written in <code>[CAPITALS]</code> becomes a chip: click
+        it, type the real value, and the chip is replaced. Each template has a
+        small <code>?</code> that explains what the document is for.
+      </p>
+
+      <p>
+        Blocks from different layers can sit in one document, and you can write
+        blocks of your own, with a label, an emoji, a colour and a body. The
+        custom library saves to a <code>blocks.json</code> file on your own
+        disk and loads back; a <code>blocks.json</code> saved from Prompt
+        Engineering Studio loads here too. Finished documents export as
+        <code>.prompt</code> JSON, a Python string, OpenAI or Anthropic
+        <code>messages</code> JSON, Markdown or plain text. A skill written
+        with file boundaries exports as a folder packed into a
+        <code>.zip</code>.
+      </p>
+
+      <h2>How settled each layer is</h2>
+
+      <p>
+        The templates in the first three layers follow formats that tools
+        already read: system prompts, spec and steering files, skill folders,
+        tool schemas, permission and hook settings, MCP server lists. You can
+        often paste them where they are going with few changes.
+      </p>
+
+      <p>
+        Loop, Graph and Fleet are in everyday use, but the file names and
+        fields differ from one tool to the next. Treat those templates as a
+        list of what such a document needs to answer, and rename the fields to
+        match your own setup.
+      </p>
+
+      <p>
+        Organisation and Holding are the least settled. Their templates borrow
+        the documents a company uses to organise people (a charter, role cards,
+        decision rights, a mandate letter, an audit plan) and apply them to
+        agents. They are a starting structure to adapt, and the Holding layer
+        in particular is still an open question.
+      </p>
+
+      <h2>What it does not do</h2>
+
+      <p>
+        It does not run anything. There is no model behind this page and no API
+        key to paste in. You assemble a document here and take it to the tool
+        you already use.
+      </p>
+
+      <p>
+        The health score and the hallucination badge are carried over from
+        Prompt Engineering Studio and read only the blocks of the Prompt layer.
+        A fleet manifest or a role card will score low on them, and that says
+        nothing about the manifest or the card.
+      </p>
+
+      <p>
+        What you write stays in your browser's local storage and in files you
+        choose yourself. There is no account. One feature talks to another
+        server: <em>Open from Bitbucket</em> reads skill files from a Bitbucket
+        Cloud repository you name, straight from your browser, with the access
+        token you give it. The token is kept in local storage only if you tick
+        the box that says so. There is a
+        <a href="https://www.oursharedcode.com/privacy/">privacy note</a> for
+        the whole site.
+      </p>
+
+      <h2>Written guides</h2>
+
+      <p>
+        The ten guides written for Prompt Engineering Studio cover the Prompt
+        layer in detail: why instructions get ignored, how to stop a model
+        inventing facts, choosing few-shot examples, when chain-of-thought is
+        worth paying for, output formats a program can parse, and how to test a
+        prompt before changing it. They are collected under
+        <a href="https://www.oursharedcode.com/prompt-engineering-studio/guides/"
+          >guides</a
+        >.
+      </p>
+
+      <footer>
+        <a href="https://www.oursharedcode.com/prompt-engineering-studio/guides/"
+          >Guides</a
+        >
+        &middot;
+        <a href="https://www.oursharedcode.com/prompt-engineering-studio/"
+          >Prompt Engineering Studio</a
+        >
+        &middot; <a href="https://www.oursharedcode.com/">OurSharedCode</a> &middot;
+        <a href="https://www.oursharedcode.com/about/">About</a> &middot;
+        <a href="https://www.oursharedcode.com/contact/">Contact</a> &middot;
+        <a href="https://www.oursharedcode.com/privacy/">Privacy</a> &middot;
+        <a href="https://github.com/oursharedcode/ace-studio">Source on GitHub</a>
+      </footer>
+    </section>
+
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
